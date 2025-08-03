@@ -931,51 +931,118 @@ export class ScrapedSong {
         return removeChorus ? Song.removeChorus(lyrics) : lyrics;
     }
 
-static parseLyricsDataBodyChildren(
-    children: ScrapedSongDataLyricsDataBodyChild[],
-    inLyrics: boolean = false,
-    excluded: boolean = false
-): string {
-    let out = "";
+    static parseLyricsDataBodyChildren(
+        children: ScrapedSongDataLyricsDataBodyChild[],
+        inLyrics: boolean = false,
+        excluded: boolean = false,
+        started: boolean = false
+    ): string {
+        let out = "";
 
-    // helper: read boolean-ish attributes safely
-    const hasTrueAttr = (obj: Record<string, string> | undefined, key: string): boolean => {
-        if (!obj) return false;
-        const v = obj[key];
-        if (v == null) return false;
-        // Genius tends to use "true" (string). Be liberal just in case.
-        return v === "true" || v === "1" || v === "" || v.toLowerCase?.() === "true";
-    };
+        const hasTrue = (
+            attrs: Record<string, string> | undefined,
+            key: string
+        ): boolean => {
+            if (!attrs) return false;
+            const v = attrs[key];
+            if (v == null) return false;
+            const s = String(v).toLowerCase();
+            return s === "true" || s === "1" || s === ""; // be liberal: some attrs are empty-string
+        };
 
-    for (const node of children) {
-        if (typeof node === "string") {
-            if (inLyrics && !excluded) out += node;
-            continue;
+        const hasNoisyClass = (attrs?: Record<string, string>): boolean => {
+            const cls = attrs?.["class"] || attrs?.["className"];
+            if (!cls) return false;
+            // Skip common non-lyric wrappers Genius uses for editorial/headers/footers
+            return /(SongDescription|Lyrics__Header|Lyrics__Footer|Editorial|RichText|Header|Footnote)/i.test(
+                cls
+            );
+        };
+
+        const textLooksLikeSectionHeader = (s: string): boolean =>
+            /\[[^\]]+\]/.test(s); // [Verse], [Chorus], etc.
+
+        const nodeHasBrDescendant = (
+            node: ScrapedSongDataLyricsDataBodyChild
+        ): boolean => {
+            if (typeof node === "string") return false;
+            if (node.tag === "br") return true;
+            if (!node.children) return false;
+            for (const c of node.children) {
+                if (nodeHasBrDescendant(c)) return true;
+            }
+            return false;
+        };
+
+        const nodeTextSample = (
+            node: ScrapedSongDataLyricsDataBodyChild,
+            limit = 200
+        ): string => {
+            let s = "";
+            const walk = (n: ScrapedSongDataLyricsDataBodyChild) => {
+                if (s.length >= limit) return;
+                if (typeof n === "string") {
+                    s += n;
+                    return;
+                }
+                if (n.children) for (const ch of n.children) walk(ch);
+            };
+            walk(node);
+            return s.slice(0, limit);
+        };
+
+        for (const node of children) {
+            if (typeof node === "string") {
+                if (inLyrics && !excluded && started) out += node;
+                continue;
+            }
+
+            const attrs = node.attributes;
+            const isLyricsContainer = hasTrue(attrs, "data-lyrics-container");
+            const isExcludedHere =
+                hasTrue(attrs, "data-exclude-from-selection") ||
+                hasTrue(attrs, "aria-hidden") ||
+                hasNoisyClass(attrs);
+
+            const nextInLyrics = inLyrics || isLyricsContainer;
+            const nextExcluded = excluded || isExcludedHere;
+
+            // Decide if we should "start" emitting here (first stanza-like block)
+            let nextStarted = started;
+            if (!started && nextInLyrics && !nextExcluded) {
+                // Start when this subtree looks like a stanza: either has <br> lines,
+                // or early text includes a [Section] header
+                const looksLikeStanza =
+                    nodeHasBrDescendant(node) ||
+                    textLooksLikeSectionHeader(nodeTextSample(node));
+                if (looksLikeStanza) nextStarted = true;
+            }
+
+            // Preserve line breaks only once we started within visible lyrics
+            if (
+                (node.tag === "br" || node.tag === "inread-ad") &&
+                nextInLyrics &&
+                !nextExcluded &&
+                nextStarted
+            ) {
+                out += "\n";
+                continue;
+            }
+
+            if (node.children?.length) {
+                out += this.parseLyricsDataBodyChildren(
+                    node.children,
+                    nextInLyrics,
+                    nextExcluded,
+                    nextStarted
+                );
+            }
         }
 
-        const attrs = node.attributes;
-        const isLyricsContainer =
-            hasTrueAttr(attrs, "data-lyrics-container");
-
-        // Editorial blurbs / headers are marked like this
-        const isExcludedHere =
-            hasTrueAttr(attrs, "data-exclude-from-selection");
-
-        const nextInLyrics = inLyrics || isLyricsContainer;
-        const nextExcluded = excluded || isExcludedHere;
-
-        // keep line breaks only for visible lyric content
-        if ((node.tag === "br" || node.tag === "inread-ad") && nextInLyrics && !nextExcluded) {
-            out += "\n";
-            continue;
-        }
-
-        if (node.children?.length) {
-            out += this.parseLyricsDataBodyChildren(node.children, nextInLyrics, nextExcluded);
-        }
+        // Cleanup: trim and normalize spacing
+        return out
+            .replace(/[ \t]+\n/g, "\n")
+            .replace(/\n{3,}/g, "\n\n")
+            .trim();
     }
-
-    // tidy up: collapse big gaps, trim edges
-    return out.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
-}
 }

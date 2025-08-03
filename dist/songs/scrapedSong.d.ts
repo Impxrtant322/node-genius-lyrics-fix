@@ -904,5 +904,5 @@ export declare class ScrapedSong {
      * @example const Lyrics = await ScrapedSong.lyrics(true);
      */
     lyrics(removeChorus?: boolean): string;
-    static parseLyricsDataBodyChildren(children: ScrapedSongDataLyricsDataBodyChild[], inLyrics?: boolean, excluded?: boolean): string;
+    static parseLyricsDataBodyChildren(children: ScrapedSongDataLyricsDataBodyChild[], inLyrics?: boolean, excluded?: boolean, started?: boolean): string;
 }
