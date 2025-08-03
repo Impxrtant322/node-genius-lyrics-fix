@@ -931,19 +931,51 @@ export class ScrapedSong {
         return removeChorus ? Song.removeChorus(lyrics) : lyrics;
     }
 
-    static parseLyricsDataBodyChildren(
-        children: ScrapedSongDataLyricsDataBodyChild[]
-    ) {
-        let lyrics = "";
-        for (const x of children) {
-            if (typeof x === "string") {
-                lyrics += x;
-            } else if (x.tag === "br" || x.tag === "inread-ad") {
-                lyrics += "\n";
-            } else if (x.children) {
-                lyrics += this.parseLyricsDataBodyChildren(x.children);
-            }
+static parseLyricsDataBodyChildren(
+    children: ScrapedSongDataLyricsDataBodyChild[],
+    inLyrics: boolean = false,
+    excluded: boolean = false
+): string {
+    let out = "";
+
+    // helper: read boolean-ish attributes safely
+    const hasTrueAttr = (obj: Record<string, string> | undefined, key: string): boolean => {
+        if (!obj) return false;
+        const v = obj[key];
+        if (v == null) return false;
+        // Genius tends to use "true" (string). Be liberal just in case.
+        return v === "true" || v === "1" || v === "" || v.toLowerCase?.() === "true";
+    };
+
+    for (const node of children) {
+        if (typeof node === "string") {
+            if (inLyrics && !excluded) out += node;
+            continue;
         }
-        return lyrics;
+
+        const attrs = node.attributes;
+        const isLyricsContainer =
+            hasTrueAttr(attrs, "data-lyrics-container");
+
+        // Editorial blurbs / headers are marked like this
+        const isExcludedHere =
+            hasTrueAttr(attrs, "data-exclude-from-selection");
+
+        const nextInLyrics = inLyrics || isLyricsContainer;
+        const nextExcluded = excluded || isExcludedHere;
+
+        // keep line breaks only for visible lyric content
+        if ((node.tag === "br" || node.tag === "inread-ad") && nextInLyrics && !nextExcluded) {
+            out += "\n";
+            continue;
+        }
+
+        if (node.children?.length) {
+            out += this.parseLyricsDataBodyChildren(node.children, nextInLyrics, nextExcluded);
+        }
     }
+
+    // tidy up: collapse big gaps, trim edges
+    return out.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
 }
